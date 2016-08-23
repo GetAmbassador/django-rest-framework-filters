@@ -123,4 +123,4 @@ class MethodFilter(Filter):
         if not it attempts to search for the method `field_{{attribute_name}}`.
         Otherwise it defaults to just returning the queryset.
         """
-        return self.action(self.name, qs, value)
+        return self.action(self.name, qs, value, self.exclude)
