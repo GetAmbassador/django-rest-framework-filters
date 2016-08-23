@@ -115,7 +115,7 @@ class MethodFilter(Filter):
             (parent.__class__.__module__, parent.__class__.__name__, parent_action)
         )
 
-    def filter(self, qs, value):
+    def filter(self, qs, value, *args, **kwargs):
         """
         This filter method will act as a proxy for the actual method we want to
         call.
