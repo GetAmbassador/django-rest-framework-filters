@@ -115,7 +115,7 @@ class MethodFilter(Filter):
             (parent.__class__.__module__, parent.__class__.__name__, parent_action)
         )
 
-    def filter(self, qs, value):
+    def filter(self, qs, value, *args, **kwargs):
         """
         This filter method will act as a proxy for the actual method we want to
         call.
@@ -123,4 +123,4 @@ class MethodFilter(Filter):
         if not it attempts to search for the method `field_{{attribute_name}}`.
         Otherwise it defaults to just returning the queryset.
         """
-        return self.action(self.name, qs, value)
+        return self.action(self.name, qs, value, self.exclude)
