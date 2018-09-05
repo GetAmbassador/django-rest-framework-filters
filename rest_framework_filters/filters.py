@@ -1,34 +1,33 @@
 from __future__ import absolute_import
 from __future__ import unicode_literals
 
-import warnings
 from django.utils import six
 
-from django_filters.filters import *
-
-from . import fields
-
-
-class ALL_LOOKUPS(object):
-    pass
+from django_filters.rest_framework.filters import *
+from rest_framework_filters.utils import import_class
 
 
-def _import_class(path):
-    module_path, class_name = path.rsplit('.', 1)
-    class_name = str(class_name)  # Ensure not unicode on py2.x
-    module = __import__(module_path, fromlist=[class_name], level=0)
-    return getattr(module, class_name)
+ALL_LOOKUPS = '__all__'
 
 
-class RelatedFilter(ModelChoiceFilter):
+class AutoFilter(Filter):
+    def __init__(self, *args, **kwargs):
+        self.lookups = kwargs.pop('lookups', [])
+
+        super(AutoFilter, self).__init__(*args, **kwargs)
+
+
+class RelatedFilter(AutoFilter, ModelChoiceFilter):
     def __init__(self, filterset, *args, **kwargs):
         self.filterset = filterset
-        return super(RelatedFilter, self).__init__(*args, **kwargs)
+        kwargs.setdefault('lookups', None)
+
+        super(RelatedFilter, self).__init__(*args, **kwargs)
 
     def filterset():
         def fget(self):
             if isinstance(self._filterset, six.string_types):
-                self._filterset = _import_class(self._filterset)
+                self._filterset = import_class(self._filterset)
             return self._filterset
 
         def fset(self, value):
@@ -37,38 +36,18 @@ class RelatedFilter(ModelChoiceFilter):
         return locals()
     filterset = property(**filterset())
 
-    @property
-    def field(self):
-        # if no queryset is provided, default to the filterset's default queryset
-        self.extra.setdefault('queryset', self.filterset._meta.model._default_manager.all())
-        return super(RelatedFilter, self).field
+    def get_queryset(self, request):
+        queryset = super(RelatedFilter, self).get_queryset(request)
+        assert queryset is not None, \
+            "Expected `.get_queryset()` for related filter '%s.%s' to return a `QuerySet`, but got `None`." \
+            % (self.parent.__class__.__name__, self.name)
+        return queryset
 
 
-class AllLookupsFilter(Filter):
-    pass
-
-
-###################################################
-# Fixed-up versions of some of the default filters
-###################################################
-
-# This class is necessary, as directly django-filter's BooleanFilter
-# is using the incorrect form widget.
-class BooleanFilter(BooleanFilter):
-    field_class = fields.BooleanField
-
-
-class InSetNumberFilter(Filter):
-    field_class = fields.ArrayDecimalField
-
+class AllLookupsFilter(AutoFilter):
     def __init__(self, *args, **kwargs):
-        super(InSetNumberFilter, self).__init__(*args, **kwargs)
-        warnings.warn(
-            'InSetNumberFilter is deprecated and no longer necessary. See: '
-            'https://github.com/philipn/django-rest-framework-filters/issues/62',
-            DeprecationWarning, stacklevel=2
-        )
-
+        kwargs.setdefault('lookups', ALL_LOOKUPS)
+        super(AllLookupsFilter, self).__init__(*args, **kwargs)
 
 class InSetCharFilter(Filter):
     field_class = fields.ArrayCharField

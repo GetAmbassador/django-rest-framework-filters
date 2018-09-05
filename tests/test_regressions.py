@@ -19,7 +19,7 @@ from rest_framework import serializers
 from rest_framework.renderers import JSONRenderer
 
 from .testapp.models import (
-    User, Person,
+    User, Person, Note, Post, Cover,
 )
 
 from .testapp.filters import (
@@ -27,6 +27,8 @@ from .testapp.filters import (
     AllLookupsPersonDateFilter,
     InSetLookupPersonIDFilter,
     InSetLookupPersonNameFilter,
+    PostFilter,
+    CoverFilterWithRelatedMethodFilter,
 )
 
 
@@ -77,16 +79,16 @@ class IsoDatetimeTests(TestCase):
             'date_joined__lte': date_str,
         }
         f = AllLookupsPersonDateFilter(GET, queryset=Person.objects.all())
-        self.assertEqual(len(list(f)), 2)
-        p = list(f)[0]
+        self.assertEqual(len(list(f.qs)), 2)
+        p = list(f.qs)[0]
 
         # DateTimeField
         GET = {
             'datetime_joined__lte': datetime_str,
         }
         f = AllLookupsPersonDateFilter(GET, queryset=Person.objects.all())
-        self.assertEqual(len(list(f)), 1)
-        p = list(f)[0]
+        self.assertEqual(len(list(f.qs)), 1)
+        p = list(f.qs)[0]
         self.assertEqual(p.name, "John")
 
         # TimeField
@@ -94,11 +96,11 @@ class IsoDatetimeTests(TestCase):
             'time_joined__lte': time_str,
         }
         f = AllLookupsPersonDateFilter(GET, queryset=Person.objects.all())
-        self.assertEqual(len(list(f)), 1)
-        p = list(f)[0]
+        self.assertEqual(len(list(f.qs)), 1)
+        p = list(f.qs)[0]
         self.assertEqual(p.name, "John")
 
-    @override_settings(USE_TZ=True)
+    @override_settings(USE_TZ=True, TIME_ZONE='UTC')
     def test_datetime_timezone_awareness(self):
         # Addresses issue #24 - ensure that datetime strings terminating
         # in 'Z' are correctly handled.
@@ -117,8 +119,8 @@ class IsoDatetimeTests(TestCase):
             'datetime_joined__lte': datetime_str,
         }
         f = AllLookupsPersonDateFilter(GET, queryset=Person.objects.all())
-        self.assertEqual(len(list(f)), 1)
-        p = list(f)[0]
+        self.assertEqual(len(list(f.qs)), 1)
+        p = list(f.qs)[0]
         self.assertEqual(p.name, "John")
 
 
@@ -133,42 +135,42 @@ class BooleanFilterTests(TestCase):
         # Capitalized True
         GET = {'is_active': 'True'}
         filterset = UserFilter(GET, queryset=User.objects.all())
-        results = list(filterset)
+        results = list(filterset.qs)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].username, 'user1')
 
         # Lowercase True
         GET = {'is_active': 'true'}
         filterset = UserFilter(GET, queryset=User.objects.all())
-        results = list(filterset)
+        results = list(filterset.qs)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].username, 'user1')
 
         # Uppercase True
         GET = {'is_active': 'TRUE'}
         filterset = UserFilter(GET, queryset=User.objects.all())
-        results = list(filterset)
+        results = list(filterset.qs)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].username, 'user1')
 
         # Capitalized False
         GET = {'is_active': 'False'}
         filterset = UserFilter(GET, queryset=User.objects.all())
-        results = list(filterset)
+        results = list(filterset.qs)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].username, 'user2')
 
         # Lowercase False
         GET = {'is_active': 'false'}
         filterset = UserFilter(GET, queryset=User.objects.all())
-        results = list(filterset)
+        results = list(filterset.qs)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].username, 'user2')
 
         # Uppercase False
         GET = {'is_active': 'FALSE'}
         filterset = UserFilter(GET, queryset=User.objects.all())
-        results = list(filterset)
+        results = list(filterset.qs)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].username, 'user2')
 
@@ -191,7 +193,7 @@ class InLookupTests(TestCase):
             'pk__in': '{:d},{:d}'.format(p1, p2),
         }
         f = InSetLookupPersonIDFilter(ALL_GET, queryset=Person.objects.all())
-        f = [x.pk for x in f]
+        f = [x.pk for x in f.qs]
         self.assertEqual(len(f), 2)
         self.assertIn(p1, f)
         self.assertIn(p2, f)
@@ -200,13 +202,13 @@ class InLookupTests(TestCase):
             'pk__in': '{:d},c{:d}'.format(p1, p2)
         }
         f = InSetLookupPersonIDFilter(INVALID_GET, queryset=Person.objects.all())
-        self.assertEqual(len(list(f)), 0)
+        self.assertEqual(len(list(f.qs)), 0)
 
         EXTRA_GET = {
             'pk__in': '{:d},{:d},{:d}'.format(p1, p2, p1*p2)
         }
         f = InSetLookupPersonIDFilter(EXTRA_GET, queryset=Person.objects.all())
-        f = [x.pk for x in f]
+        f = [x.pk for x in f.qs]
         self.assertEqual(len(f), 2)
         self.assertIn(p1, f)
         self.assertIn(p2, f)
@@ -215,7 +217,7 @@ class InLookupTests(TestCase):
             'pk__in': '{:d},{:d},{:d}'.format(p2, p2*p1, p1)
         }
         f = InSetLookupPersonIDFilter(DISORDERED_GET, queryset=Person.objects.all())
-        f = [x.pk for x in f]
+        f = [x.pk for x in f.qs]
         self.assertEqual(len(f), 2)
         self.assertIn(p1, f)
         self.assertIn(p2, f)
@@ -228,7 +230,7 @@ class InLookupTests(TestCase):
             'name__in': '{},{}'.format(p1, p2),
         }
         f = InSetLookupPersonNameFilter(ALL_GET, queryset=Person.objects.all())
-        f = [x.name for x in f]
+        f = [x.name for x in f.qs]
         self.assertEqual(len(f), 2)
         self.assertIn(p1, f)
         self.assertIn(p2, f)
@@ -237,13 +239,13 @@ class InLookupTests(TestCase):
             'name__in': '{},Foo{}'.format(p1, p2)
         }
         f = InSetLookupPersonNameFilter(NONEXISTENT_GET, queryset=Person.objects.all())
-        self.assertEqual(len(list(f)), 1)
+        self.assertEqual(len(list(f.qs)), 1)
 
         EXTRA_GET = {
             'name__in': '{},{},{}'.format(p1, p2, p1+p2)
         }
         f = InSetLookupPersonNameFilter(EXTRA_GET, queryset=Person.objects.all())
-        f = [x.name for x in f]
+        f = [x.name for x in f.qs]
         self.assertEqual(len(f), 2)
         self.assertIn(p1, f)
         self.assertIn(p2, f)
@@ -252,7 +254,7 @@ class InLookupTests(TestCase):
             'name__in': '{},{},{}'.format(p2, p2+p1, p1)
         }
         f = InSetLookupPersonNameFilter(DISORDERED_GET, queryset=Person.objects.all())
-        f = [x.name for x in f]
+        f = [x.name for x in f.qs]
         self.assertEqual(len(f), 2)
         self.assertIn(p1, f)
         self.assertIn(p2, f)
@@ -275,12 +277,53 @@ class IsNullLookupTests(TestCase):
 
         GET = {'last_login__isnull': 'false'}
         filterset = UserFilter(GET, queryset=User.objects.all())
-        results = list(filterset)
+        results = list(filterset.qs)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].username, 'user1')
 
         GET = {'last_login__isnull': 'true'}
         filterset = UserFilter(GET, queryset=User.objects.all())
-        results = list(filterset)
+        results = list(filterset.qs)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].username, 'user2')
+
+
+class FilterMethodTests(TestCase):
+    """
+    Old test case for MethodFilter. Ensure that the new Filter.method remains compatible.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        user = User.objects.create(username="user1", email="user1@example.org")
+
+        note1 = Note.objects.create(title="Test 1", content="Test content 1", author=user)
+        note2 = Note.objects.create(title="Test 2", content="Test content 2", author=user)
+
+        post1 = Post.objects.create(note=note1, content="Test content in post 1")
+        post2 = Post.objects.create(note=note2, content="Test content in post 2", date_published=datetime.date.today())
+
+        Cover.objects.create(post=post1, comment="Cover 1")
+        Cover.objects.create(post=post2, comment="Cover 2")
+
+    def test_method_filter(self):
+        GET = {
+            'is_published': 'true'
+        }
+        filterset = PostFilter(GET, queryset=Post.objects.all())
+        results = list(filterset.qs)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].content, "Test content in post 2")
+
+    def test_related_method_filter(self):
+        """
+        Missing MethodFilter filter methods are silently ignored, returning
+        the unfiltered queryset.
+        """
+        GET = {
+            'post__is_published': 'true'
+        }
+        filterset = CoverFilterWithRelatedMethodFilter(GET, queryset=Cover.objects.all())
+        results = list(filterset.qs)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].comment, "Cover 2")

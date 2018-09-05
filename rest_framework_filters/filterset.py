@@ -3,82 +3,58 @@ from __future__ import unicode_literals
 
 from collections import OrderedDict
 import copy
-import warnings
 
-from django.db import models
 from django.db.models.constants import LOOKUP_SEP
-from django.db.models.fields.related import ForeignObjectRel
 from django.utils import six
 
-from django_filters import filterset
+from django_filters import filterset, rest_framework
+from django_filters.utils import get_model_field
 
 from . import filters
 from . import utils
 
 
-def _base(f):
-    f._base = True
-    return f
-
-
-def _get_fix_filter_field(cls):
-    method = getattr(cls, 'fix_filter_field')
-    if not getattr(method, '_base', False):
-        warnings.warn(
-            'fix_filter_field is deprecated and no longer necessary. See: '
-            'https://github.com/philipn/django-rest-framework-filters/issues/62',
-            DeprecationWarning, stacklevel=2
-        )
-    return cls.fix_filter_field
-
-
 class FilterSetMetaclass(filterset.FilterSetMetaclass):
     def __new__(cls, name, bases, attrs):
-        cls.convert__all__(attrs)
-
         new_class = super(FilterSetMetaclass, cls).__new__(cls, name, bases, attrs)
-        fix_filter_field = _get_fix_filter_field(new_class)
-        opts = new_class._meta
 
-        # order_by is not compatible.
-        if opts.order_by:
-            opts.order_by = False
-            warnings.warn(
-                'order_by is no longer supported. Use '
-                'rest_framework.filters.OrderingFilter instead. See: '
-                'https://github.com/philipn/django-rest-framework-filters/issues/72',
-                DeprecationWarning, stacklevel=2
-            )
+        opts = copy.deepcopy(new_class._meta)
+        orig_meta = new_class._meta
 
-        # If no model is defined, skip all lookups processing
+        declared_filters = new_class.declared_filters.copy()
+        orig_declared = new_class.declared_filters
+
+        # If no model is defined, skip auto filter processing
         if not opts.model:
             return new_class
 
-        # Populate our FilterSet fields with all the possible
-        # filters for the AllLookupsFilter field.
-        for name, filter_ in six.iteritems(new_class.base_filters.copy()):
-            if isinstance(filter_, filters.AllLookupsFilter):
-                field = filterset.get_model_field(opts.model, filter_.name)
+        # Generate filters for auto filters
+        auto_filters = OrderedDict([
+            (param, f) for param, f in six.iteritems(new_class.declared_filters)
+            if isinstance(f, filters.AutoFilter)
+        ])
 
-                for lookup_expr in utils.lookups_for_field(field):
-                    if isinstance(field, ForeignObjectRel):
-                        f = new_class.filter_for_reverse_field(field, filter_.name)
-                    else:
-                        f = new_class.filter_for_field(field, filter_.name, lookup_expr)
-                    f = fix_filter_field(f)
+        # Remove auto filters from declared_filters so that they *are* overwritten
+        # RelatedFilter is an exception, and should *not* be overwritten
+        for param, f in six.iteritems(auto_filters):
+            if not isinstance(f, filters.RelatedFilter):
+                del declared_filters[param]
 
-                    # compute filter name
-                    filter_name = LOOKUP_SEP.join([name, lookup_expr])
+        for param, f in six.iteritems(auto_filters):
+            opts.fields = {f.name: f.lookups or []}
 
-                    # Don't add "exact" to filter names
-                    _exact = LOOKUP_SEP + 'exact'
-                    if filter_name.endswith(_exact):
-                        filter_name = filter_name[:-len(_exact)]
+            # patch, generate auto filters
+            new_class._meta, new_class.declared_filters = opts, declared_filters
+            generated_filters = new_class.get_filters()
 
-                    new_class.base_filters[filter_name] = f
+            # get_filters() generates param names from the model field name
+            # Replace the field name with the parameter name from the filerset
+            new_class.base_filters.update(OrderedDict(
+                (gen_param.replace(f.name, param, 1), gen_f)
+                for gen_param, gen_f in six.iteritems(generated_filters)
+            ))
 
-            elif name not in new_class.declared_filters:
-                new_class.base_filters[name] = fix_filter_field(filter_)
+        new_class._meta, new_class.declared_filters = orig_meta, orig_declared
 
         return new_class
 
@@ -94,71 +70,22 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
             ])
         return self._related_filters
 
-    @staticmethod
-    def convert__all__(attrs):
-        """
-        Extract Meta.fields and convert any fields w/ `__all__`
-        to a declared AllLookupsFilter.
 
-        This is a temporary hack to fix #87.
-        """
-        meta = attrs.get('Meta', None)
-        model = getattr(meta, 'model', None)
-        fields = getattr(meta, 'fields', None)
-
-        if model and isinstance(fields, dict):
-            for name, lookups in six.iteritems(fields.copy()):
-                if lookups == filters.ALL_LOOKUPS:
-                    warnings.warn(
-                        "ALL_LOOKUPS has been deprecated in favor of '__all__'. See: "
-                        "https://github.com/philipn/django-rest-framework-filters/issues/62",
-                        DeprecationWarning, stacklevel=2
-                    )
-                    lookups = '__all__'
-
-                if lookups == '__all__':
-                    # Modifying fields is incorrect. The correct behavior will
-                    # require hooking into filters_for_model
-                    field = model._meta.get_field(name)
-                    fields[name] = utils.lookups_for_field(field)
-
-
-class FilterSet(six.with_metaclass(FilterSetMetaclass, filterset.FilterSet)):
-    filter_overrides = {
-        # uses API-friendly django_filters.BooleanWidget
-        models.BooleanField: {
-            'filter_class': filters.BooleanFilter,
-        },
-
-        # In order to support ISO-8601 -- which is the default output for
-        # DRF -- we need to use django-filter's IsoDateTimeFilter
-        models.DateTimeField: {
-            'filter_class': filters.IsoDateTimeFilter,
-        },
-    }
+class FilterSet(six.with_metaclass(FilterSetMetaclass, rest_framework.FilterSet)):
     _subset_cache = {}
 
-    def __init__(self, *args, **kwargs):
-        if 'cache' in kwargs:
-            warnings.warn(
-                "'cache' argument is deprecated. Override '_subset_cache' instead.",
-                DeprecationWarning, stacklevel=2
-            )
-            self.__class__._subset_cache = kwargs.pop('cache', None)
+    @classmethod
+    def get_fields(cls):
+        fields = super(FilterSet, cls).get_fields()
 
-        super(FilterSet, self).__init__(*args, **kwargs)
+        for name, lookups in six.iteritems(fields):
+            if lookups == filters.ALL_LOOKUPS:
+                field = get_model_field(cls._meta.model, name)
+                fields[name] = utils.lookups_for_field(field)
 
-        for name, filter_ in six.iteritems(self.filters.copy()):
-            if isinstance(filter_, filters.RelatedFilter):
-                # Add an 'isnull' filter to allow checking if the relation is empty.
-                filter_name = "%s%sisnull" % (filter_.name, LOOKUP_SEP)
-                if filter_name not in self.filters:
-                    self.filters[filter_name] = filters.BooleanFilter(name=filter_.name, lookup_expr='isnull')
+        return fields
 
-            elif isinstance(filter_, filters.MethodFilter):
-                filter_.resolve_action()
-
-    def get_filters(self):
+    def expand_filters(self):
         """
         Build a set of filters based on the requested data. The resulting set
         will walk `RelatedFilter`s to recursively build the set of filters.
@@ -188,18 +115,22 @@ class FilterSet(six.with_metaclass(FilterSetMetaclass, filterset.FilterSet)):
 
             # include exclusion keys
             if exclude_name in self.data:
-                f = copy.deepcopy(f)
-                f.exclude = not f.exclude
-                requested_filters[exclude_name] = f
+                # deepcopy the *base* filter to prevent copying of model & parent
+                f_copy = copy.deepcopy(self.base_filters[filter_name])
+                f_copy.parent = f.parent
+                f_copy.model = f.model
+                f_copy.exclude = not f.exclude
+
+                requested_filters[exclude_name] = f_copy
 
             # include filters from related subsets
             if isinstance(f, filters.RelatedFilter) and filter_name in related_data:
                 subset_data = related_data[filter_name]
                 subset_class = f.filterset.get_subset(subset_data)
-                filterset = subset_class(data=subset_data)
+                filterset = subset_class(data=subset_data, request=self.request)
 
                 # modify filter names to account for relationship
-                for related_name, related_f in six.iteritems(filterset.get_filters()):
+                for related_name, related_f in six.iteritems(filterset.expand_filters()):
                     related_name = LOOKUP_SEP.join([filter_name, related_name])
                     related_f.name = LOOKUP_SEP.join([f.name, related_f.name])
                     requested_filters[related_name] = related_f
@@ -207,22 +138,22 @@ class FilterSet(six.with_metaclass(FilterSetMetaclass, filterset.FilterSet)):
         return requested_filters
 
     @classmethod
-    def get_filter_name(cls, param):
+    def get_param_filter_name(cls, param):
         """
         Get the filter name for the request data parameter.
 
         ex::
 
             # regular attribute filters
-            name = FilterSet.get_filter_name('email')
+            name = FilterSet.get_param_filter_name('email')
             assert name == 'email'
 
             # exclusion filters
-            name = FilterSet.get_filter_name('email!')
+            name = FilterSet.get_param_filter_name('email!')
             assert name == 'email'
 
             # related filters
-            name = FilterSet.get_filter_name('author__email')
+            name = FilterSet.get_param_filter_name('author__email')
             assert name == 'author'
 
         """
@@ -286,7 +217,7 @@ class FilterSet(six.with_metaclass(FilterSetMetaclass, filterset.FilterSet)):
         # param names that traverse relations are translated to just the local
         # filter names. eg, `author__username` => `author`. Empty values are
         # removed, as they indicate an unknown field eg, author__foobar__isnull
-        filter_names = [cls.get_filter_name(param) for param in params]
+        filter_names = [cls.get_param_filter_name(param) for param in params]
         filter_names = [f for f in filter_names if f is not None]
 
         # attempt to retrieve related filterset subset from the cache
@@ -297,13 +228,13 @@ class FilterSet(six.with_metaclass(FilterSetMetaclass, filterset.FilterSet)):
         if subset_class is not None:
             return subset_class
 
-        class FilterSubsetMetaclass(FilterSetMetaclass):
+        class FilterSubsetMetaclass(type(cls)):
             def __new__(cls, name, bases, attrs):
                 new_class = super(FilterSubsetMetaclass, cls).__new__(cls, name, bases, attrs)
                 new_class.base_filters = OrderedDict([
-                    (name, f)
-                    for name, f in six.iteritems(new_class.base_filters)
-                    if name in filter_names
+                    (param, f)
+                    for param, f in six.iteritems(new_class.base_filters)
+                    if param in filter_names
                 ])
                 return new_class
 
@@ -329,15 +260,10 @@ class FilterSet(six.with_metaclass(FilterSetMetaclass, filterset.FilterSet)):
     @property
     def qs(self):
         available_filters = self.filters
-        requested_filters = self.get_filters()
+        requested_filters = self.expand_filters()
 
         self.filters = requested_filters
         qs = super(FilterSet, self).qs
         self.filters = available_filters
 
         return qs
-
-    @classmethod
-    @_base
-    def fix_filter_field(cls, f):
-        return f

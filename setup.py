@@ -5,6 +5,10 @@ from setuptools import setup
 import os
 
 
+with open('README.rst') as f:
+    README = f.read()
+
+
 def get_packages(package):
     """
     Return root package and all sub-packages.
@@ -32,9 +36,10 @@ def get_package_data(package):
 
 setup(
     name='djangorestframework-filters',
-    version='0.8.0',
+    version='0.10.2',
     url='http://github.com/philipn/django-rest-framework-filters',
     license='MIT',
+    long_description=README,
     description='Better filtering for Django REST Framework',
     author='Philip Neustrom',
     author_email='philipn@gmail.com',
@@ -43,7 +48,7 @@ setup(
     zip_safe=False,
     install_requires=[
         'djangorestframework',
-        'django-filter>=0.13.0',
+        'django-filter>=1.0.0',
     ],
     classifiers=[
         'Development Status :: 5 - Production/Stable',
